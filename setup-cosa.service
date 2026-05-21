@@ -1,0 +1,14 @@
+[Unit]
+Description=Pull coreos-assembler image and install cosa wrapper
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=!/var/lib/setup-cosa.done
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/setup-cosa.sh
+ExecStartPost=/usr/bin/touch /var/lib/setup-cosa.done
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
