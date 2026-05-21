@@ -50,10 +50,20 @@ EOF
 chmod 0440 /etc/sudoers.d/agent
 EORUN
 
+# -- GRUB: skip boot menu for faster startup ------------------------------------
+RUN <<EORUN
+cat <<EOF > /etc/default/grub
+GRUB_TIMEOUT=0
+GRUB_TIMEOUT_STYLE=hidden
+EOF
+EORUN
+
 # -- coreos-assembler (cosa) setup at first boot --------------------------------
-COPY setup-cosa.sh /usr/local/bin/setup-cosa.sh
-COPY setup-cosa.service /etc/systemd/system/setup-cosa.service
-RUN chmod 755 /usr/local/bin/setup-cosa.sh && systemctl enable setup-cosa.service
+COPY cosa/cosa /usr/local/bin/cosa
+COPY cosa/setup-cosa.sh /usr/local/bin/setup-cosa.sh
+COPY cosa/setup-cosa.service /etc/systemd/system/setup-cosa.service
+RUN chmod 755 /usr/local/bin/cosa /usr/local/bin/setup-cosa.sh && \
+    systemctl enable setup-cosa.service
 
 RUN bootc container lint
 

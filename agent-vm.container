@@ -15,8 +15,8 @@ Volume=%h/.local/share/agent-vm:/vm:Z
 # UEFI firmware (read-only from host)
 Volume=/usr/share/OVMF:/usr/share/OVMF:ro
 
-# Forward SSH port to localhost
-PublishPort=127.0.0.1:9922:9922
+# Forward SSH port (0.0.0.0 so other containers on the host can reach it)
+PublishPort=9922:9922
 
 Exec=qemu-system-x86_64 \
     -M accel=kvm \

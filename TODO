@@ -1,0 +1,64 @@
+## Investigate: Persistent cache disk for container storage
+
+Add a separate `cache.qcow2` disk image that is mounted into the VM as a
+dedicated volume for container storage (e.g. `/var/lib/containers/storage`).
+Unlike the main disk which boots with `-snapshot`, this cache disk would
+persist across VM restarts so that pulled container images and layer caches
+survive reboots.
+
+Things to figure out:
+- Create and format the qcow2 (qemu-img create, filesystem choice)
+- Add a second `-drive` to the QEMU command in agent-vm.container (without -snapshot)
+- Auto-mount it inside the VM (fstab or systemd .mount unit)
+- Point podman/buildah storage to that mount
+- Handle first-boot initialization (format if empty)
+- Size considerations (how large, thin provisioning)
+
+## Investigate: Disable SSH encryption for faster host-VM file transfers
+
+Since the VM is only reachable over localhost (127.0.0.1:9922), the SSH
+encryption overhead is unnecessary and may slow down large file transfers
+(scp/sftp). Look into ways to reduce or eliminate that overhead.
+
+Things to figure out:
+- Use the `none` cipher in OpenSSH (`-o Ciphers=none`) -- requires `NoneEnabled yes` in sshd_config; only available in some patched builds (HPN-SSH)
+- Use the fastest available cipher instead (e.g. `aes128-gcm@openssh.com` or `chacha20-poly1305`)
+- Alternative transports: virtio-9p, virtio-fs, or QEMU's built-in SMB/NFS sharing to bypass SSH entirely for file transfers
+- rsync over a unix socket or netcat for bulk transfers
+- Benchmark current throughput vs alternatives
+
+## Investigate: Faster VM boot
+
+### Kernel / boot cmdline
+- Use `console=ttyS0` only -- drop `console=tty0` since this is a headless
+  VM with `-nographic`. One less console to initialize.
+- Add `quiet` to suppress kernel log output on the serial console (serial
+  I/O is slow and blocks boot).
+- Add `systemd.show_status=no` to suppress systemd status messages.
+- Add `rd.shell=0 rd.emergency=reboot` to skip loading emergency shell code
+  in initramfs.
+
+### Systemd services
+- Disable unneeded services: `firewalld`, `auditd`, `chronyd` (QEMU passes
+  time via kvmclock), `NetworkManager-wait-online.service`, etc.
+- Mask `grub2-systemd-integration.service` and similar one-shot services
+  that aren't useful in a disposable snapshot VM.
+- Run `systemd-analyze blame` on the VM to find the slowest units and
+  decide what to disable.
+
+### QEMU options (agent-vm.container)
+- Use virtio disk: `-drive file=/vm/disk.qcow2,if=virtio,format=qcow2`
+  instead of the default IDE emulation. Much faster I/O.
+- Use `-machine q35` instead of default i440fx -- closer to modern hardware,
+  faster UEFI init.
+- Use OVMF vars in RAM (transient pflash copy for UEFI vars).
+- Add `cache=unsafe` to the drive since we already use `-snapshot` (writes
+  are discarded anyway, so no data-loss risk).
+
+### Firmware
+- Use OVMF 4M variant without Secure Boot (`OVMF_CODE_4M.fd`) -- smaller
+  firmware, fewer checks at init.
+- Consider direct kernel boot (`-kernel vmlinuz -initrd initramfs -append
+  "root=..."`) to bypass UEFI/GRUB entirely. This is the single biggest
+  speedup but requires extracting kernel/initrd from the image.
+- Look into `microvm` machine type as an alternative to q35.
