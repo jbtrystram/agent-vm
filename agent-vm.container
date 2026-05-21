@@ -1,0 +1,37 @@
+[Unit]
+Description=Agent VM (QEMU via toolbox)
+
+[Container]
+Image=quay.io/jbtrystram/toolbox
+ContainerName=agent-vm
+AutoUpdate=registry
+
+# Pass through KVM device for hardware acceleration
+AddDevice=/dev/kvm
+
+# The QCOW2 disk image
+Volume=%h/.local/share/agent-vm:/vm:Z
+
+# UEFI firmware (read-only from host)
+Volume=/usr/share/OVMF:/usr/share/OVMF:ro
+
+# Forward SSH port to localhost
+PublishPort=127.0.0.1:9922:9922
+
+Exec=qemu-system-x86_64 \
+    -M accel=kvm \
+    -cpu host \
+    -smp 4 \
+    -m 4096 \
+    -bios /usr/share/OVMF/OVMF_CODE.fd \
+    -nographic \
+    -snapshot \
+    -nic user,hostfwd=tcp:0.0.0.0:9922-:22 \
+    /vm/disk.qcow2
+
+[Service]
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

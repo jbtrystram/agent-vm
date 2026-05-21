@@ -1,0 +1,4 @@
+[[customizations.user]]
+name = "agent"
+key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHJc/qpKdmC9oGJapuBjESihXq/M7PdubghcSQpj3vW4 agent@desktop"
+groups = ["wheel"]
