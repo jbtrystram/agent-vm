@@ -1,6 +1,6 @@
 ---
 name: privileged-vm
-description: Access a Fedora VM to execute any operation.
+description: Launch an ephemeral Fedora VM to execute privileged operations.
 ---
 
 # Skill: Agent VM
@@ -13,57 +13,76 @@ not possible inside the sandboxed agent container. This includes:
 - Running coreos-assembler (`cosa`) commands
 - Any task requiring root-level access
 
-## Connecting
+## Launching the VM
 
-The VM is always running on the host. Connect via SSH:
+The VM is managed by a systemd user service. Start it with:
 
 ```bash
-ssh -i ~/.ssh/ia-agent -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 9922 agent@localhost
+systemctl --user start agent-vm.service
 ```
 
-- Port: **9922**
-- User: **agent**
-- Host: **localhost**
-- Key: **~/.ssh/ia-agent**
+To enable it at boot (started automatically on login):
+```bash
+systemctl --user enable agent-vm.service
+```
 
-The `agent` user has passwordless `sudo`.
-
-## Always create a working directory
-
-This VM is shared with multiple agents. Make sure to create you own workspace.
-The worksapce should be named after the directory the agent is running into.
+Wait a few seconds for the VM to boot, then verify it is reachable:
+```bash
+bcvk ephemeral ssh ai-vm 'echo ok'
+```
 
 ## Running commands
 
-You can run commands non-interactively:
-
+Run commands inside the VM non-interactively:
 ```bash
-ssh -i ~/.ssh/ia-agent -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 9922 agent@localhost '<command>'
+bcvk ephemeral ssh ai-vm '<command>'
 ```
 
 For example:
-
 ```bash
 # Build a container image
-ssh -i ~/.ssh/ia-agent -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 9922 agent@localhost 'podman build -t myimage /path/to/context'
+bcvk ephemeral ssh ai-vm 'podman build -t myimage /run/virtiofs-mnt-workdir'
 
 # Run cosa
-ssh -i ~/.ssh/ia-agent -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 9922 agent@localhost 'cd /srv/workdir && cosa fetch && cosa build'
+bcvk ephemeral ssh ai-vm 'mkdir ~/cosa && cd ~/cosa && cosa init --force https://github.com/coreos/fedora-coreos-config && cosa fetch && cosa build'
 
 # Run anything as root
-ssh -i ~/.ssh/ia-agent -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 9922 agent@localhost 'sudo dnf install -y <package>'
+bcvk ephemeral ssh ai-vm 'sudo dnf install -y <package>'
+```
+
+## Sharing files with the VM
+
+To mount a host directory into the VM, add `--bind` to the `ExecStart`
+line in the systemd unit (or use a drop-in override):
+```bash
+systemctl --user edit agent-vm.service
+```
+```ini
+[Service]
+ExecStart=
+ExecStart=/usr/bin/bcvk ephemeral run --rm -K --console \
+    --bind /path/to/workdir:workdir \
+    --name ai-vm ${CONTAINER_IMAGE}
+```
+
+Inside the VM, the directory is available at `/run/virtiofs-mnt-workdir`.
+
+If the VM is already running without a bind mount, use `scp` style
+transfer via `podman cp`:
+```bash
+podman cp localfile ai-vm:/path/in/container
+```
+
+## Stopping the VM
+
+When done, stop and auto-remove the VM:
+```bash
+systemctl --user stop agent-vm.service
 ```
 
 ## Important notes
 
-- The VM boots from a **snapshot** -- all changes are lost on reboot.
-  Do not store persistent data inside the VM. Copy results back to the
-  host before disconnecting.
-- To copy files to/from the VM, use `scp`:
-  ```bash
-  scp -i ~/.ssh/ia-agent -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -P 9922 localfile agent@localhost:/tmp/
-  scp -i ~/.ssh/ia-agent -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -P 9922 agent@localhost:/tmp/result ./
-  ```
+- The VM is **ephemeral** -- all changes are lost when stopped.
+- The `agent` user has passwordless `sudo`.
+- `cosa` is available at `/usr/local/bin/cosa` (pulls its container image on first use).
 - The VM has 4 vCPUs and 4GB of RAM.
-- `cosa` is available as a wrapper script at `/usr/local/bin/cosa` after
-  first boot (it pulls the container image automatically).

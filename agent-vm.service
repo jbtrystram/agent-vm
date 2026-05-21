@@ -1,0 +1,16 @@
+[Unit]
+Description=Ephemeral agent VM (bcvk)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=CONTAINER_IMAGE=ghcr.io/jbtrystram/agent-vm:latest
+ExecStart=/usr/bin/bcvk ephemeral run --rm -K --console --name ai-vm ${CONTAINER_IMAGE}
+ExecStop=/usr/bin/podman stop ai-vm
+Restart=on-failure
+RestartSec=10s
+TimeoutStartSec=120
+
+[Install]
+WantedBy=default.target

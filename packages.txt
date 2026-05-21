@@ -23,3 +23,9 @@ podman
 buildah
 skopeo
 
+# bcvk ephemeral prerequisites
+bubblewrap
+binutils
+openssh-clients
+openssh-server
+sudo

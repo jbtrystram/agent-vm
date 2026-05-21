@@ -1,0 +1,22 @@
+#!/bin/bash
+# Wrapper around coreos-assembler running in a container.
+# Usage: cosa <subcommand> [args...]
+#
+# The current directory is mounted as the working directory inside the
+# container, so run this from your cosa workdir.
+# The image is pulled automatically on first use.
+
+set -euo pipefail
+
+COSA_IMAGE="quay.io/coreos-assembler/coreos-assembler:latest"
+
+exec podman run --rm -ti \
+    --security-opt label=disable \
+    --privileged \
+    --uidmap=1000:0:1 --uidmap=0:1:1000 --uidmap=1001:1001:64536 \
+    -v "${PWD}:/srv:z" \
+    --device /dev/kvm \
+    --tmpfs /tmp \
+    --name cosa \
+    "${COSA_IMAGE}" \
+    "$@"

@@ -8,46 +8,56 @@ However there is one big limitation: agents can't build containers or do more pr
 operations. This `Agent-VM` works around this.
 
 It provides a bootc-based VM with:
-- SSH access (key-based auth only)
 - Passwordless `sudo` for the `agent` user
 - [coreos-assembler (cosa)](https://github.com/coreos/coreos-assembler) available via a wrapper script
 - Container tools: `podman`, `buildah`, `skopeo`
-- Compilers and build essentials: `gcc`, `g++`, `make`, `cmake`, `python3`
-- Common CLI utilities: `git`, `curl`, `jq`, `vim`, `tmux`, `htop`, etc.
+- Compilers and build essentials: `make`, `cmake`, `python3`
+- Common CLI utilities: `git`, `curl`, `jq`, etc.
 
-On first boot, a systemd service pulls the cosa container image and installs
-a `cosa` wrapper at `/usr/local/bin/cosa`. Agents can then run `cosa` commands
-directly from any working directory.
+## How it works
 
-## Running the VM
+The VM is launched on demand by agents using
+[bcvk](https://bootc.dev/bcvk/) (`bootc virtualization kit`).
+bcvk boots the container image directly via virtiofs -- no disk image
+creation, no QCOW2, starts in seconds.
 
-The host (Bazzite) doesn't ship `qemu-system-x86_64`, so the VM runs
-inside a toolbox container via a Podman quadlet.
+Each VM is **ephemeral**: stateless by default, destroyed when stopped.
 
-### Setup
+## Prerequisites
 
+Install `bcvk` on the host:
 ```bash
-mkdir -p ~/.local/share/agent-vm
-cp <qcow2-image> ~/.local/share/agent-vm/disk.qcow2
-mkdir -p ~/.config/containers/systemd
-cp agent-vm.container ~/.config/containers/systemd/
-systemctl --user daemon-reload
-systemctl --user start agent-vm.service
+dnf install bcvk
+# on image mode systems
+rpm-ostree install bcvk
 ```
 
-To have it start automatically at boot (before login), enable lingering:
-```bash
-loginctl enable-linger $USER
-```
-
-### Connecting
+## Usage
 
 ```bash
-ssh -i ~/.ssh/ia-agent -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 9922 agent@localhost
-```
+# Launch the VM
+bcvk ephemeral run -d --rm -K \
+    --vcpus 4 --memory 4G \
+    --name agent-vm \
+    ghcr.io/jbtrystram/agent-vm:latest
 
-The VM always boots from a clean state thanks to `-snapshot`.
-Check the logs with `journalctl --user -u agent-vm`.
+# SSH in
+bcvk ephemeral ssh agent-vm
+
+# Run a command
+bcvk ephemeral ssh agent-vm 'podman build -t myimage .'
+
+# Mount a host directory into the VM
+bcvk ephemeral run -d --rm -K \
+    --vcpus 4 --memory 4G \
+    --bind ~/code:code \
+    --name agent-vm \
+    ghcr.io/jbtrystram/agent-vm:latest
+# Available inside VM at /run/virtiofs-mnt-code
+
+# Stop and clean up
+podman stop agent-vm
+```
 
 ## Container image
 
@@ -59,33 +69,3 @@ ghcr.io/jbtrystram/agent-vm:latest
 ```
 
 You can also pull a specific version by its Git SHA tag.
-
-## Create the initial VM snapshot
-
-We use bootc as a base image. The QCOW2 disk image can be created
-with [bootc-image-builder](https://github.com/osbuild/bootc-image-builder).
-
-First, edit `config.toml` and replace the placeholder SSH key with your
-actual public key:
-```toml
-[[customizations.user]]
-name = "agent"
-key = "ssh-ed25519 AAAA... you@host"
-groups = ["wheel"]
-```
-
-Then build the QCOW2 image:
-```bash
-sudo podman run --rm --privileged \
-   -v /var/lib/containers/storage:/var/lib/containers/storage \
-   -v .:/srv \
-   ghcr.io/osbuild/image-builder-cli:latest \
-   build qcow2 \
-   --bootc-ref ghcr.io/jbtrystram/agent-vm:latest \
-   --blueprint /srv/config.toml \
-   --output-dir /srv/
-```
-
-The resulting QCOW2 image will be written to `./output/qcow2/disk.qcow2`.
-The `agent` user will have your SSH key baked in and ready to use.
-
