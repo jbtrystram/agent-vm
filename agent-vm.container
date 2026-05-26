@@ -15,19 +15,13 @@ Volume=%h/.local/share/agent-vm:/vm:Z
 # UEFI firmware (read-only from host)
 Volume=/usr/share/OVMF:/usr/share/OVMF:ro
 
+# VM launch script
+Volume=%h/.local/bin/launch-vm-agent.sh:/launch-vm.sh:ro,Z
+
 # Forward SSH port (0.0.0.0 so other containers on the host can reach it)
 PublishPort=9922:9922
 
-Exec=qemu-system-x86_64 \
-    -M accel=kvm \
-    -cpu host \
-    -smp 4 \
-    -m 4096 \
-    -bios /usr/share/OVMF/OVMF_CODE.fd \
-    -nographic \
-    -snapshot \
-    -nic user,hostfwd=tcp:0.0.0.0:9922-:22 \
-    /vm/disk.qcow2
+Exec=/launch-vm.sh
 
 [Service]
 Restart=on-failure

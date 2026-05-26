@@ -1,2 +1,4 @@
 # disk images
 *.qcow2
+# cloud-init seed ISO (generated locally)
+*.iso

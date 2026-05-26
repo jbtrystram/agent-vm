@@ -6,7 +6,7 @@ ConditionPathExists=!/var/lib/setup-cosa.done
 
 [Service]
 Type=oneshot
-User=agent
+User=fedora
 ExecStart=/usr/local/bin/setup-cosa.sh
 ExecStartPost=/usr/bin/touch /var/lib/setup-cosa.done
 RemainAfterExit=yes

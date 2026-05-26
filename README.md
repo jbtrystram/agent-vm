@@ -7,73 +7,95 @@ paths from my HOME. See my [aibox script](https://github.com/jbtrystram/dotfiles
 However there is one big limitation: agents can't build containers or do more privileged
 operations. This `Agent-VM` setup works around this.
 
-It provides a bootc-based VM with:
+It provides a VM with:
 - SSH access (key-based auth only)
-- Passwordless `sudo` for the `agent` user
+- Passwordless `sudo` for the `fedora` user
 - [coreos-assembler (cosa)](https://github.com/coreos/coreos-assembler) available via a wrapper script
 - Container tools: `podman`, `buildah`, `skopeo`
 - Compilers and build essentials: `gcc`, `g++`, `make`, `cmake`, `python3`
 - Common CLI utilities: `git`, `curl`, `jq`, `vim`, `tmux`, `htop`, etc.
 
-On first boot, a systemd service pulls the cosa container image and installs
-a `cosa` wrapper at `/usr/local/bin/cosa`. Agents can then run `cosa` commands
-directly from any working directory.
+## Initial setup
 
-## Create the initial VM snapshot
+### 1. Download the Fedora Cloud image
 
-First, build the container, as root because image-builder needs
-root privileges:
-```
-sudo podman build . -t localhost/agent-vm
-```
-We use bootc as a base image. The QCOW2 disk image can be created
-with [bootc-image-builder](https://github.com/osbuild/bootc-image-builder).
-
-First, edit `config.toml` and replace the placeholder SSH key with your
-actual public key:
-```toml
-[[customizations.user]]
-name = "agent"
-key = "ssh-ed25519 AAAA... you@host"
-groups = ["wheel"]
-```
-
-Then build the QCOW2 image:
 ```bash
-sudo podman run --rm --privileged \
-   -v /var/lib/containers/storage:/var/lib/containers/storage \
-   -v .:/srv \
-   ghcr.io/osbuild/image-builder-cli:latest \
-   build qcow2 \
-   --bootc-ref localhost/agent-vm\
-   --blueprint /srv/config.toml \
-   --output-dir /srv/
-   --output-name ia-vm
+IMAGE_URL=$(curl -s https://fedoraproject.org/releases.json | \
+  jq -r '[.[] | select(.variant=="Cloud" and .arch=="x86_64" and (.link | endswith(".qcow2")))] | sort_by(.version | tonumber) | last | .link')
+
+export IMAGE=$(basename $IMAGE_URL)
+curl -L  $IMAGE_URL -o $IMAGE
 ```
 
-The resulting QCOW2 image will be written to `./ia-vm.qcow2`.
-The `agent` user will have your SSH key baked in and ready to use.
+### 2. Resize the disk
 
-## Running the VM
+The stock image is small. Resize it so there's room to work:
+```bash
+qemu-img resize $IMAGE 40G
+```
 
- The VM runs inside a container so we don't requires to have any other dependencies
-than `/dev/kvm` on the host.
+### 3. Add your SSH public key to cloud-init
 
-### Setup
+Edit `cloud-init/user-data` and replace the placeholder `ssh_authorized_keys`
+entry with your actual public key:
+```yaml
+ssh_authorized_keys:
+  - ssh-ed25519 AAAA...your-actual-key... user@host
+```
+
+### 4. Build the cloud-init seed ISO
+
+Generate a seed ISO from the cloud-init config:
+```bash
+genisoimage -output seed.iso -volid cidata -joliet -rock cloud-init/user-data cloud-init/meta-data
+```
+
+### 5. Provision the VM (one-time boot)
+
+Boot the image **without** `-snapshot`, attaching the seed ISO so cloud-init
+runs, installs packages, configures sshd, sets up cosa, and writes your SSH
+key to the `fedora` user's `authorized_keys`:
+```bash
+qemu-system-x86_64 \
+    -M accel=kvm \
+    -cpu host \
+    -smp 4 \
+    -m 4096 \
+    -bios /usr/share/OVMF/OVMF_CODE.fd \
+    -nographic \
+    -nic user,hostfwd=tcp::9922-:22 \
+    -drive file=$IMAGE,if=virtio \
+    -drive file=seed.iso,if=virtio,format=raw
+```
+
+Wait for cloud-init to finish (you can watch the console output or SSH in
+once sshd is up). Then shut the VM down -- this QCOW2 is now your golden
+base image.
+
+### 6. Install the Quadlet
 
 ```bash
 mkdir -p ~/.local/share/agent-vm
-cp <qcow2-image> ~/.local/share/agent-vm/disk.qcow2
+mv $IMAGE ~/.local/share/agent-vm/disk.qcow2
 mkdir -p ~/.config/containers/systemd
 cp agent-vm.container ~/.config/containers/systemd/
+cp launch-vm.sh ~/.local/bin/launch-vm-agent.sh
 systemctl --user daemon-reload
 systemctl --user start agent-vm.service
 ```
 
-### Connecting
+## SSH key
+
+The SSH public key is baked into the golden image by cloud-init during
+provisioning (step 3 above). Since the VM runs with `-snapshot`, the image
+is never modified -- the key persists across reboots without any per-boot
+injection. To change the key, update `cloud-init/user-data`, rebuild the
+seed ISO, and re-provision the golden image.
+
+## Connecting
 
 ```bash
-ssh -i ~/.ssh/ia-agent -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 9922 agent@localhost
+ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 9922 fedora@localhost
 ```
 
 Or add this to your `~/.ssh/config`:
@@ -81,7 +103,7 @@ Or add this to your `~/.ssh/config`:
 Host agent-vm
     HostName localhost
     Port 9922
-    User agent
+    User fedora
     IdentityFile ~/.ssh/ia-agent
     StrictHostKeyChecking no
     UserKnownHostsFile /dev/null

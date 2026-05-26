@@ -1,0 +1,99 @@
+#cloud-config
+
+# -- SSH key --------------------------------------------------------------------
+# Replace with your actual SSH public key before building the seed ISO.
+ssh_authorized_keys:
+  - ssh-ed25519 <your-key-here>
+
+# -- Packages -------------------------------------------------------------------
+package_update: true
+package_upgrade: false
+packages:
+  # Basic CLI utilities
+  - curl
+  - wget
+  - git
+  - jq
+  - findutils
+  - diffutils
+  - less
+  - unzip
+  - tar
+  - xz
+  # Compilers & build essentials
+  - make
+  - cmake
+  - automake
+  - autoconf
+  - python3
+  - python3-pip
+  # Container tools
+  - podman
+  - buildah
+  - skopeo
+
+# -- Write files ----------------------------------------------------------------
+write_files:
+  # cosa wrapper script
+  - path: /usr/local/bin/cosa
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      # Wrapper around coreos-assembler running in a container.
+      # Usage: cosa <subcommand> [args...]
+      #
+      # The current directory is mounted as the working directory inside the
+      # container, so run this from your cosa workdir.
+
+      set -euo pipefail
+
+      COSA_IMAGE="quay.io/coreos-assembler/coreos-assembler:latest"
+
+      exec podman run --rm -ti \
+          --security-opt label=disable \
+          --privileged \
+          --uidmap=1000:0:1 --uidmap=0:1:1000 --uidmap=1001:1001:64536 \
+          -v "${PWD}:/srv:z" \
+          --device /dev/kvm \
+          --tmpfs /tmp \
+          --name cosa \
+          "${COSA_IMAGE}" \
+          "$@"
+
+  # cosa image pull script (runs once via systemd)
+  - path: /usr/local/bin/setup-cosa.sh
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      # Pulls the coreos-assembler container image.
+      set -euo pipefail
+      COSA_IMAGE="quay.io/coreos-assembler/coreos-assembler:latest"
+      echo "setup-cosa: pulling ${COSA_IMAGE}..."
+      podman pull "${COSA_IMAGE}"
+      echo "setup-cosa: done."
+
+  # systemd unit to pull cosa image on first boot
+  - path: /etc/systemd/system/setup-cosa.service
+    content: |
+      [Unit]
+      Description=Pull coreos-assembler container image
+      After=network-online.target
+      Wants=network-online.target
+      ConditionPathExists=!/var/lib/setup-cosa.done
+
+      [Service]
+      Type=oneshot
+      User=fedora
+      ExecStart=/usr/local/bin/setup-cosa.sh
+      ExecStartPost=/usr/bin/touch /var/lib/setup-cosa.done
+      RemainAfterExit=yes
+
+      [Install]
+      WantedBy=multi-user.target
+
+# -- Run commands (first boot only) ---------------------------------------------
+runcmd:
+  - systemctl daemon-reload
+  - systemctl enable setup-cosa.service
+  # Disable cloud-init on subsequent boots (everything is provisioned)
+  - touch /etc/cloud/cloud-init.disabled
